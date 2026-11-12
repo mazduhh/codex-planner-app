@@ -44,9 +44,12 @@
   let weekOffset = 0;
   let editingId = null;
   let deletedItem = null;
+  const storageKey = "codex-planner.tasks.v1";
+  let storageError = false;
+  let needsInitialSave = false;
 
-  // One task record drives each view; storage can be added without changing rendering.
-  const tasks = [
+  // One task record drives every view. Browser storage can be replaced by an account API later.
+  const starterTasks = [
     { id: crypto.randomUUID(), title: "Review class notes", type: "assignment", date: dateInput(shiftDate(now, -1)), start: "4:00 PM", end: "", complete: false },
     { id: crypto.randomUUID(), title: "Plan the week", type: "task", date: today, start: "", end: "", complete: false },
     { id: crypto.randomUUID(), title: "Study for upcoming quiz", type: "assignment", date: dateInput(shiftDate(now, 1)), start: "5:00 PM", end: "", complete: false },
@@ -54,6 +57,41 @@
     { id: crypto.randomUUID(), title: "Prepare project outline", type: "assignment", date: dateInput(shiftDate(now, 5)), start: "", end: "", complete: false },
     { id: crypto.randomUUID(), title: "Reply to study group", type: "task", date: today, start: "", end: "", complete: true }
   ];
+
+  const readSavedTasks = () => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      if (saved === null) { needsInitialSave = true; return starterTasks; }
+      const parsed = JSON.parse(saved);
+      if (!Array.isArray(parsed)) throw new Error("Saved planner data is not a task list.");
+      return parsed.filter((task) => task && typeof task.id === "string" && typeof task.title === "string")
+        .map((task) => ({
+          id: task.id,
+          title: task.title,
+          type: ["task", "assignment", "event"].includes(task.type) ? task.type : "task",
+          date: typeof task.date === "string" ? task.date : "",
+          start: typeof task.start === "string" ? task.start : "",
+          end: typeof task.end === "string" ? task.end : "",
+          complete: task.complete === true,
+          category: typeof task.category === "string" ? task.category : ""
+        }));
+    } catch (error) {
+      storageError = true;
+      return starterTasks;
+    }
+  };
+
+  const tasks = readSavedTasks();
+  const saveTasks = () => {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(tasks));
+      return true;
+    } catch (error) {
+      storageError = true;
+      setStatus("Could not save changes in this browser. Check available site storage.");
+      return false;
+    }
+  };
 
   const setStatus = (message, undo = false) => {
     elements.status.replaceChildren(document.createTextNode(message));
@@ -203,7 +241,8 @@
     if (event.target.matches(".delete-action")) {
       deletedItem = { task, index: tasks.indexOf(task) };
       tasks.splice(deletedItem.index, 1);
-      setStatus(`“${task.title}” deleted.`, true);
+      const saved = saveTasks();
+      setStatus(saved ? `“${task.title}” deleted.` : "Could not save this change in browser storage.", true);
       render();
     }
   });
@@ -213,7 +252,8 @@
     const task = tasks.find((item) => item.id === event.target.closest("[data-task-id]")?.dataset.taskId);
     if (!task) return;
     task.complete = event.target.checked;
-    setStatus(task.complete ? `“${task.title}” moved to Completed.` : `“${task.title}” restored to its date.`);
+    const saved = saveTasks();
+    setStatus(saved ? (task.complete ? `“${task.title}” moved to Completed.` : `“${task.title}” restored to its date.`) : "Could not save this change in browser storage.");
     render();
   });
 
@@ -229,10 +269,10 @@
     if (editingId) {
       const task = tasks.find((item) => item.id === editingId);
       Object.assign(task, values);
-      setStatus(`Saved changes to “${task.title}”.`);
+      setStatus(saveTasks() ? `Saved changes to “${task.title}”.` : "Could not save this change in browser storage.");
     } else {
-      tasks.push({ id: crypto.randomUUID(), ...values, complete: false });
-      setStatus(`“${values.title}” added.`);
+      tasks.push({ id: crypto.randomUUID(), ...values, complete: false, category: "" });
+      setStatus(saveTasks() ? `“${values.title}” added.` : "Could not save this change in browser storage.");
     }
     selectedDate = values.date || today;
     elements.form.reset();
@@ -244,7 +284,7 @@
   function restoreDeleted() {
     if (!deletedItem) return;
     tasks.splice(deletedItem.index, 0, deletedItem.task);
-    setStatus("Task restored.");
+    setStatus(saveTasks() ? "Task restored." : "Could not save this change in browser storage.");
     deletedItem = null;
     render();
   }
@@ -264,6 +304,8 @@
   });
 
   render();
+  if (needsInitialSave) saveTasks();
+  if (storageError) setStatus("Browser storage is unavailable or saved data could not be read.");
   // Keep the displayed day current if the page stays open across midnight or wakes from sleep.
   window.setInterval(render, 60_000);
   document.addEventListener("visibilitychange", () => { if (!document.hidden) render(); });
